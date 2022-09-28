@@ -47,15 +47,16 @@ pub async fn get_online_servers() -> Vec<Server> {
     ONLINE_SERVERS.read().await.to_vec()
 }
 
-const AUTHORIZED_SERVERS: [&str; 1] = ["192.168.0.13"];
-
-fn check_server_authorization(req: &mut Request) -> Result<SocketAddrV4, StatusError> {
+pub fn authorize_server_connection(
+    req: &mut Request,
+    res: &mut Response,
+) -> Result<SocketAddrV4, StatusError> {
     let socket_info = req
         .remote_addr()
         .ok_or(StatusError::unauthorized())?
         .as_ipv4()
         .ok_or(StatusError::unauthorized())?;
-    if !AUTHORIZED_SERVERS.contains(&socket_info.ip().to_string().as_str()) {
+    if !crate::global::AUTHORIZED_SERVERS.contains(&socket_info.ip().to_string().as_str()) {
         tracing::warn!(
             "Unauthorized server tried to connect: {}",
             socket_info.ip().to_string()
@@ -69,21 +70,7 @@ fn check_server_authorization(req: &mut Request) -> Result<SocketAddrV4, StatusE
     Ok(socket_info.clone())
 }
 
-#[handler]
-pub async fn on_server_connection(
-    req: &mut Request,
-    res: &mut Response,
-) -> Result<(), StatusError> {
-    tracing::info!("A server is trying to connect");
-    let socket_info = check_server_authorization(req)?;
-    WebSocketUpgrade::new()
-        .upgrade(req, res, move |ws| async move {
-            handle_server_connection(ws, socket_info).await
-        })
-        .await
-}
-
-async fn handle_server_connection(ws: WebSocket, socket_info: SocketAddrV4) {
+pub async fn handle_server_connection(ws: WebSocket, socket_info: SocketAddrV4) {
     //adds the server to the list
     let (server_ws_tx, mut server_ws_rx) = ws.split();
 
