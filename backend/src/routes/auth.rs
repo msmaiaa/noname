@@ -5,6 +5,7 @@ use salvo::{
     prelude::{StatusCode, StatusError},
     Request, Response,
 };
+use serde::{Deserialize, Serialize};
 use steam_auth;
 
 enum Error {
@@ -34,14 +35,71 @@ pub fn login(req: &mut Request, res: &mut Response) -> Result<(), StatusError> {
     Ok(())
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+struct SteamUser {
+    steamid: String,
+    communityvisibilitystate: i32,
+    profilestate: i32,
+    personaname: String,
+    commentpermission: i32,
+    profileurl: String,
+    avatar: String,
+    avatarmedium: String,
+    avatarfull: String,
+    avatarhash: String,
+    lastlogoff: i32,
+    personastate: i32,
+    realname: String,
+    primaryclanid: String,
+    timecreated: i32,
+    personastateflags: i32,
+    loccountrycode: String,
+}
+
+#[derive(Deserialize)]
+struct SteamResponsePlayers {
+    players: Vec<SteamUser>,
+}
+#[derive(Deserialize)]
+struct SteamGetPlayerSummaryResponse {
+    response: SteamResponsePlayers,
+}
+
 #[handler]
 pub async fn steam_callback(req: &mut Request, res: &mut Response) -> Result<(), StatusError> {
     let qs = req.uri().query().ok_or(StatusError::bad_request())?;
 
     let steamid = verify_steam_request(qs).await?;
-
-    res.render(steamid.to_string());
+    let user = query_steam_user(steamid).await?;
+    res.render(salvo::writer::Json(user));
     Ok(())
+}
+
+async fn query_steam_user(steamid: u64) -> Result<SteamUser, StatusError> {
+    let steam_key = std::env::var("STEAM_KEY").map_err(|_| {
+        tracing::error!("STEAM_KEY is not set in the environment variables");
+        StatusError::internal_server_error()
+    })?;
+
+    let player_summary_api_url = format!(
+        "http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key={}&steamids={}",
+        steam_key, steamid
+    );
+    let resp = reqwest::get(player_summary_api_url.as_str())
+        .await
+        .map_err(|_| StatusError::internal_server_error())?;
+    let body = resp
+        .text()
+        .await
+        .map_err(|_| StatusError::internal_server_error())?;
+    let body: SteamGetPlayerSummaryResponse = serde_json::from_str(body.as_str()).map_err(|e| {
+        tracing::error!("Failed to parse steam response: {}", e);
+        StatusError::internal_server_error()
+    })?;
+    if body.response.players.len() == 0 {
+        return Err(StatusError::unauthorized());
+    }
+    Ok(body.response.players[0].clone())
 }
 
 async fn verify_steam_request(query_string: &str) -> Result<u64, StatusError> {
