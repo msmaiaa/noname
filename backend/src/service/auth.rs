@@ -1,6 +1,8 @@
 use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 
+use salvo::extra::jwt_auth::JwtAuthDepotExt;
+use salvo::Depot;
 use serde::{Deserialize, Serialize};
 use steam_auth;
 
@@ -8,7 +10,7 @@ use crate::error::AppError;
 use crate::global;
 use crate::model::user::User;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TokenData {
     pub steamid64: String,
     pub is_admin: bool,
@@ -46,11 +48,19 @@ struct SteamGetPlayerSummaryResponse {
     response: SteamResponsePlayers,
 }
 
+pub fn extract_data_from_depot(depot: &mut Depot) -> Option<TokenData> {
+    depot
+        .jwt_auth_data::<TokenData>()
+        .map(|data| data.claims.clone())
+}
+
 pub fn generate_steam_redirector() -> Result<steam_auth::Redirector, AppError> {
-    steam_auth::Redirector::new(global::API_URL.to_string(), "/auth/steam_callback").map_err(|e| {
-        tracing::error!("Failed to create redirector: {}", e);
-        AppError::SteamError(e)
-    })
+    steam_auth::Redirector::new(global::API_URL.to_string(), "/api/auth/steam_callback").map_err(
+        |e| {
+            tracing::error!("Failed to create redirector: {}", e);
+            AppError::SteamError(e)
+        },
+    )
 }
 
 pub fn create_access_token(steamid64: String, is_admin: bool) -> Result<String, AppError> {

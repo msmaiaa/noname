@@ -1,10 +1,16 @@
 use dotenv::dotenv;
-use salvo::{extra::ws::WebSocketUpgrade, prelude::*};
+use salvo::{
+    extra::{
+        jwt_auth::{JwtAuth, JwtAuthDepotExt, JwtTokenExtractor},
+        ws::WebSocketUpgrade,
+    },
+    prelude::*,
+};
 
-pub mod auth;
 pub mod driver;
 pub mod error;
 pub mod global;
+pub mod middleware;
 pub mod model;
 pub mod routes;
 pub mod service;
@@ -38,6 +44,32 @@ async fn on_ws_connection(req: &mut Request, res: &mut Response) -> Result<(), S
     Ok(())
 }
 
+struct JwtExtractor;
+
+#[async_trait]
+impl JwtTokenExtractor for JwtExtractor {
+    async fn token(&self, req: &mut Request) -> Option<String> {
+        req.headers()
+            .get("Authorization")
+            .map(|v| v.to_str().unwrap().replace("Bearer ", ""))
+    }
+}
+
+#[handler]
+async fn with_admin(
+    _: &mut Request,
+    depot: &mut Depot,
+    _: &mut Response,
+) -> Result<(), StatusError> {
+    depot
+        .jwt_auth_data::<service::auth::TokenData>()
+        .ok_or(StatusError::unauthorized())
+        .map(|data| match data.claims.is_admin {
+            true => Ok(()),
+            false => Err(StatusError::unauthorized()),
+        })?
+}
+
 #[tokio::main]
 async fn main() {
     dotenv().ok();
@@ -49,12 +81,22 @@ async fn main() {
 
     let listen_addr = format!("0.0.0.0:{}", *global::PORT);
 
+    let auth_handler: JwtAuth<service::auth::TokenData> = JwtAuth::new(global::JWT_KEY.to_string())
+        .with_extractors(vec![Box::new(JwtExtractor {})])
+        .with_response_error(true);
+
     let router = Router::new()
-        .push(Router::with_path("/auth/login").get(routes::auth::login))
-        .push(Router::with_path("/auth/steam_callback").get(routes::auth::steam_callback))
-        .push(Router::with_path("/servers").get(routes::server::get_servers))
-        .push(Router::with_path("ws/server").handle(on_ws_connection))
-        .push(Router::with_path("ws/admin").handle(on_ws_connection));
+        .push(Router::with_path("/api/auth/login").get(routes::auth::login))
+        .push(Router::with_path("/api/auth/steam_callback").get(routes::auth::steam_callback))
+        .push(
+            Router::with_path("/api/servers")
+                .hoop(auth_handler)
+                .hoop(with_admin)
+                .get(routes::server::get_servers)
+                .post(routes::server::create_server),
+        )
+        .push(Router::with_path("/ws/server").handle(on_ws_connection))
+        .push(Router::with_path("/ws/admin").handle(on_ws_connection));
 
     tracing::info!("Server started at http://{}/", listen_addr);
 
