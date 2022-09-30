@@ -40,11 +40,9 @@ async fn on_ws_connection(req: &mut Request, res: &mut Response) -> Result<(), S
 async fn main() {
     dotenv().ok();
     tracing_subscriber::fmt::init();
-
     global::RB
         .init(rbdc_pg::driver::PgDriver {}, global::DATABASE_URL.as_str())
         .expect("Failed to initialize database connection");
-
     driver::db::migrate(driver::db::DbKind::Postgres).await;
 
     let host = std::env::var("HOST").unwrap_or("0.0.0.0".to_string());

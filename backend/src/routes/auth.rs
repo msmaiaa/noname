@@ -1,3 +1,7 @@
+use chrono::{Duration, Utc};
+use jsonwebtoken::errors::Error as JwtError;
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use rbatis::rbdc::datetime::FastDateTime;
 use salvo::{
     handler,
     http::HeaderValue,
@@ -8,8 +12,52 @@ use salvo::{
 use serde::{Deserialize, Serialize};
 use steam_auth;
 
-enum Error {
-    Any,
+use crate::model::user::User;
+
+#[derive(Serialize, Deserialize, Clone)]
+struct SteamUser {
+    steamid: String,
+    communityvisibilitystate: i32,
+    profilestate: i32,
+    personaname: String,
+    commentpermission: i32,
+    profileurl: String,
+    avatar: String,
+    avatarmedium: String,
+    avatarfull: String,
+    avatarhash: String,
+    lastlogoff: i32,
+    personastate: i32,
+    realname: String,
+    primaryclanid: String,
+    timecreated: i32,
+    personastateflags: i32,
+    loccountrycode: String,
+}
+
+#[derive(Serialize)]
+pub struct TokenData {
+    pub steamid64: String,
+    pub is_admin: bool,
+    pub iat: i64,
+    pub exp: i64,
+}
+
+#[derive(Serialize)]
+pub struct LoginResponse {
+    token: String,
+    personaname: String,
+    avatar: String,
+}
+
+impl LoginResponse {
+    pub fn new(token: String, personaname: String, avatar: String) -> Self {
+        Self {
+            token,
+            personaname,
+            avatar,
+        }
+    }
 }
 
 #[handler]
@@ -35,25 +83,75 @@ pub fn login(req: &mut Request, res: &mut Response) -> Result<(), StatusError> {
     Ok(())
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-struct SteamUser {
-    steamid: String,
-    communityvisibilitystate: i32,
-    profilestate: i32,
-    personaname: String,
-    commentpermission: i32,
-    profileurl: String,
-    avatar: String,
-    avatarmedium: String,
-    avatarfull: String,
-    avatarhash: String,
-    lastlogoff: i32,
-    personastate: i32,
-    realname: String,
-    primaryclanid: String,
-    timecreated: i32,
-    personastateflags: i32,
-    loccountrycode: String,
+#[handler]
+pub async fn steam_callback(req: &mut Request, res: &mut Response) -> Result<(), StatusError> {
+    let qs = req.uri().query().ok_or(StatusError::bad_request())?;
+
+    let steamid64 = verify_steam_request(qs).await?;
+
+    let mut token = String::new();
+    match crate::model::user::select_by_steamid(
+        &mut crate::global::RB.clone(),
+        steamid64.to_string(),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to select user: {}", e);
+        StatusError::internal_server_error()
+    })? {
+        Some(user) => {
+            token = create_access_token(user.steamid64, user.is_admin).map_err(|e| {
+                tracing::error!("Failed to create access token: {}", e);
+                StatusError::internal_server_error()
+            })?;
+        }
+        None => {
+            let new_user = User {
+                steamid64: steamid64.to_string(),
+                is_admin: false,
+                created_at: FastDateTime::now(),
+            };
+            User::insert(&mut crate::global::RB.clone(), &new_user)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to insert user: {}", e);
+                    StatusError::internal_server_error()
+                })?;
+            token = create_access_token(new_user.steamid64, new_user.is_admin).map_err(|e| {
+                tracing::error!("Failed to create access token: {}", e);
+                StatusError::internal_server_error()
+            })?;
+        }
+    }
+    let steam_user = query_steam_user(steamid64).await?;
+    res.render(salvo::writer::Json(LoginResponse::new(
+        token,
+        steam_user.personaname,
+        steam_user.avatar,
+    )));
+
+    Ok(())
+}
+
+pub fn create_access_token(steamid64: String, is_admin: bool) -> Result<String, JwtError> {
+    let iat = Utc::now();
+    let exp = iat + Duration::seconds(3600);
+    let iat = iat.timestamp_millis();
+    let exp = exp.timestamp_millis();
+
+    let key = EncodingKey::from_secret(
+        std::env::var("JWT_KEY")
+            .expect("JWT_KEY not set")
+            .as_bytes(),
+    );
+    let claims = TokenData {
+        steamid64,
+        is_admin,
+        iat,
+        exp,
+    };
+    let header = Header::new(Algorithm::HS256);
+    encode(&header, &claims, &key)
 }
 
 #[derive(Deserialize)]
@@ -63,16 +161,6 @@ struct SteamResponsePlayers {
 #[derive(Deserialize)]
 struct SteamGetPlayerSummaryResponse {
     response: SteamResponsePlayers,
-}
-
-#[handler]
-pub async fn steam_callback(req: &mut Request, res: &mut Response) -> Result<(), StatusError> {
-    let qs = req.uri().query().ok_or(StatusError::bad_request())?;
-
-    let steamid = verify_steam_request(qs).await?;
-    let user = query_steam_user(steamid).await?;
-    res.render(salvo::writer::Json(user));
-    Ok(())
 }
 
 async fn query_steam_user(steamid: u64) -> Result<SteamUser, StatusError> {
