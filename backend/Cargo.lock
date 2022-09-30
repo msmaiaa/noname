@@ -181,7 +181,7 @@ dependencies = [
  "dotenv",
  "futures-util",
  "jsonwebtoken",
- "once_cell",
+ "lazy_static",
  "rbatis",
  "rbdc-pg",
  "rbs",

@@ -13,3 +13,13 @@ crud!(User {}, "app_user");
 pub async fn select_by_steamid(rb: &Rbatis, steamid64: String) -> rbatis::Result<Option<User>> {
     impled!()
 }
+
+impl User {
+    pub fn from_steamid64(steamid64: u64) -> Self {
+        Self {
+            steamid64: steamid64.to_string(),
+            is_admin: false,
+            created_at: FastDateTime::now(),
+        }
+    }
+}
