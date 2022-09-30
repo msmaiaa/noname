@@ -1,15 +1,12 @@
 use dotenv::dotenv;
-use once_cell::sync::Lazy;
-use rbatis::Rbatis;
 use salvo::{extra::ws::WebSocketUpgrade, prelude::*};
 
 pub mod auth;
+pub mod driver;
 pub mod global;
 pub mod model;
 pub mod routes;
 pub mod ws;
-
-pub static RB: Lazy<Rbatis> = Lazy::new(Rbatis::new);
 
 #[handler]
 async fn on_ws_connection(req: &mut Request, res: &mut Response) -> Result<(), StatusError> {
@@ -43,6 +40,12 @@ async fn on_ws_connection(req: &mut Request, res: &mut Response) -> Result<(), S
 async fn main() {
     dotenv().ok();
     tracing_subscriber::fmt::init();
+
+    global::RB
+        .init(rbdc_pg::driver::PgDriver {}, global::DATABASE_URL.as_str())
+        .expect("Failed to initialize database connection");
+
+    driver::db::migrate(driver::db::DbKind::Postgres).await;
 
     let host = std::env::var("HOST").unwrap_or("0.0.0.0".to_string());
     let port = std::env::var("PORT").unwrap_or("1337".to_string());
