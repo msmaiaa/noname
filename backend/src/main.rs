@@ -3,9 +3,11 @@ use salvo::{extra::ws::WebSocketUpgrade, prelude::*};
 
 pub mod auth;
 pub mod driver;
+pub mod error;
 pub mod global;
 pub mod model;
 pub mod routes;
+pub mod service;
 pub mod ws;
 
 #[handler]
@@ -45,9 +47,7 @@ async fn main() {
         .expect("Failed to initialize database connection");
     driver::db::migrate(driver::db::DbKind::Postgres).await;
 
-    let host = std::env::var("HOST").unwrap_or("0.0.0.0".to_string());
-    let port = std::env::var("PORT").unwrap_or("1337".to_string());
-    let addr = format!("{}:{}", host, port);
+    let listen_addr = format!("0.0.0.0:{}", *global::PORT);
 
     let router = Router::new()
         .push(Router::with_path("/auth/login").get(routes::auth::login))
@@ -56,9 +56,9 @@ async fn main() {
         .push(Router::with_path("ws/server").handle(on_ws_connection))
         .push(Router::with_path("ws/admin").handle(on_ws_connection));
 
-    tracing::info!("Server started at http://{}/", addr);
+    tracing::info!("Server started at http://{}/", listen_addr);
 
-    Server::new(TcpListener::bind(format!("{}:{}", host, port).as_str()))
+    Server::new(TcpListener::bind(&listen_addr))
         .serve(router)
         .await;
 }
