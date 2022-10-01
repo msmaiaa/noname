@@ -1,7 +1,6 @@
 use chrono::{Duration, Utc};
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header};
 
-use salvo::extra::jwt_auth::JwtAuthDepotExt;
 use salvo::Depot;
 use serde::{Deserialize, Serialize};
 use steam_auth;
@@ -49,8 +48,8 @@ struct SteamGetPlayerSummaryResponse {
 
 pub fn extract_data_from_depot(depot: &mut Depot) -> Option<TokenData> {
     depot
-        .jwt_auth_data::<TokenData>()
-        .map(|data| data.claims.clone())
+        .get::<TokenData>("token_data")
+        .map(|data| data.clone())
 }
 
 pub fn generate_steam_redirector() -> Result<steam_auth::Redirector, AppError> {
@@ -158,4 +157,9 @@ pub async fn verify_steam_request(query_string: &str) -> Result<u64, AppError> {
     verifier
         .verify_response(response_string)
         .map_err(|_| AppError::Unauthorized)
+}
+
+pub fn decode_token(token: &str) -> Result<TokenData, jsonwebtoken::errors::Error> {
+    let key = DecodingKey::from_secret(global::JWT_KEY.as_bytes());
+    decode::<TokenData>(&token, &key, &jsonwebtoken::Validation::default()).map(|data| data.claims)
 }
