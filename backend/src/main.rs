@@ -20,10 +20,10 @@ pub mod ws;
 async fn on_ws_connection(req: &mut Request, res: &mut Response) -> Result<(), StatusError> {
     match req.uri().to_string().as_str() {
         "/ws/server" => {
-            let data = ws::server::authorize_server_connection(req, res)?;
+            let data = ws::server::authorize_server_connection(req, res).await?;
             WebSocketUpgrade::new()
                 .upgrade(req, res, move |ws| async move {
-                    ws::server::handle_server_connection(ws, data).await
+                    ws::server::handle_server_connection(ws, &data).await
                 })
                 .await?;
         }

@@ -2,16 +2,15 @@ use std::net::SocketAddrV4;
 
 use futures_util::{FutureExt, StreamExt};
 
-use salvo::extra::ws::{Message, WebSocket, WebSocketUpgrade};
+use crate::model::server;
+use salvo::extra::ws::{Message, WebSocket};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
+use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use tokio::sync::{mpsc, RwLock};
-
 use crate::global::ONLINE_SERVERS;
-
-pub type ServerList = RwLock<Vec<Server>>;
+pub type ServerList = RwLock<Vec<ConnectedServer>>;
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 enum ServerStatus {
@@ -24,7 +23,8 @@ enum ServerStatus {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct Server {
+pub struct ConnectedServer {
+    id: u32,
     ip: String,
     port: String,
     status: ServerStatus,
@@ -43,34 +43,38 @@ fn default_conn() -> mpsc::UnboundedSender<Result<Message, salvo::Error>> {
     tx
 }
 
-pub async fn get_online_servers() -> Vec<Server> {
+pub async fn get_online_servers() -> Vec<ConnectedServer> {
     ONLINE_SERVERS.read().await.to_vec()
 }
 
-pub fn authorize_server_connection(
+pub async fn authorize_server_connection(
     req: &mut Request,
-    res: &mut Response,
-) -> Result<SocketAddrV4, StatusError> {
+    _: &mut Response,
+) -> Result<server::Server, StatusError> {
     let socket_info = req
         .remote_addr()
         .ok_or(StatusError::unauthorized())?
         .as_ipv4()
         .ok_or(StatusError::unauthorized())?;
-    if !crate::global::AUTHORIZED_SERVERS.contains(&socket_info.ip().to_string().as_str()) {
-        tracing::warn!(
-            "Unauthorized server tried to connect: {}",
-            socket_info.ip().to_string()
-        );
-        return Err(StatusError::unauthorized());
-    }
-    tracing::info!(
-        "Authorized server connected: {}",
-        socket_info.ip().to_string()
-    );
-    Ok(socket_info.clone())
+    let port: String = req
+        .header::<String>("PORT")
+        .map(|p| p.to_string())
+        .ok_or(StatusError::unauthorized())?;
+    let found_server = server::select_by_full_ip(
+        &mut crate::global::RB.clone(),
+        socket_info.ip().to_string(),
+        port,
+    )
+    .await
+    .map_err(|e| StatusError::internal_server_error())?
+    .ok_or({
+        tracing::info!("Unauthorized server tried to connect: {}", socket_info.ip());
+        StatusError::unauthorized()
+    })?;
+    Ok(found_server)
 }
 
-pub async fn handle_server_connection(ws: WebSocket, socket_info: SocketAddrV4) {
+pub async fn handle_server_connection(ws: WebSocket, connected_server: &server::Server) {
     //adds the server to the list
     let (server_ws_tx, mut server_ws_rx) = ws.split();
 
@@ -82,10 +86,12 @@ pub async fn handle_server_connection(ws: WebSocket, socket_info: SocketAddrV4) 
         }
     });
     tokio::task::spawn(fut);
+    let _connected_server = connected_server.clone();
     let fut = async move {
-        ONLINE_SERVERS.write().await.push(Server {
-            ip: socket_info.ip().to_string(),
-            port: socket_info.port().to_string(),
+        ONLINE_SERVERS.write().await.push(ConnectedServer {
+            id: _connected_server.id.unwrap(),
+            ip: _connected_server.ip.clone(),
+            port: _connected_server.port.clone(),
             status: ServerStatus::Idle,
             conn: tx,
         });
@@ -94,11 +100,14 @@ pub async fn handle_server_connection(ws: WebSocket, socket_info: SocketAddrV4) 
             let msg = match result {
                 Ok(msg) => msg,
                 Err(e) => {
-                    eprintln!("websocket server error(uid={}): {}", socket_info.ip(), e);
+                    eprintln!(
+                        "websocket server error(uid={}): {}",
+                        _connected_server.ip, e
+                    );
                     break;
                 }
             };
-            on_server_message(socket_info, msg)
+            on_server_message(&_connected_server, msg)
                 .await
                 .map_err(|e| {
                     tracing::error!(error = ?e, "Error while handling server message");
@@ -106,7 +115,7 @@ pub async fn handle_server_connection(ws: WebSocket, socket_info: SocketAddrV4) 
                 .ok();
         }
 
-        on_server_disconnected(socket_info).await;
+        on_server_disconnected(&_connected_server).await;
     };
     tokio::task::spawn(fut);
 }
@@ -122,7 +131,7 @@ struct ServerMessage {
     data: ServerMessageData,
 }
 
-async fn on_server_message(server_data: SocketAddrV4, msg: Message) -> anyhow::Result<()> {
+async fn on_server_message(server_data: &server::Server, msg: Message) -> anyhow::Result<()> {
     if !msg.is_text() {
         return Ok(());
     }
@@ -135,7 +144,7 @@ async fn on_server_message(server_data: SocketAddrV4, msg: Message) -> anyhow::R
                 ServerMessageData::Status(status) => status,
             };
             for server in ONLINE_SERVERS.write().await.iter_mut() {
-                if server.ip == server_data.ip().to_string() {
+                if server.ip == server_data.ip && server.port == server_data.port {
                     server.status = status;
                 }
             }
@@ -144,10 +153,10 @@ async fn on_server_message(server_data: SocketAddrV4, msg: Message) -> anyhow::R
     Ok(())
 }
 
-async fn on_server_disconnected(server_data: SocketAddrV4) {
-    tracing::info!("Server {} disconnected", server_data.ip().to_string());
+async fn on_server_disconnected(server_data: &server::Server) {
+    tracing::info!("Server {} disconnected", server_data.ip);
     ONLINE_SERVERS.write().await.retain(|server| {
-        if server.ip == server_data.ip().to_string() {
+        if server.ip == server_data.ip && server.port == server_data.port {
             return false;
         }
         true
