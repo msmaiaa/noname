@@ -1,5 +1,3 @@
-use std::net::SocketAddrV4;
-
 use futures_util::{FutureExt, StreamExt};
 
 use crate::model::server;
@@ -13,7 +11,7 @@ use crate::global::ONLINE_SERVERS;
 pub type ServerList = RwLock<Vec<ConnectedServer>>;
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
-enum ServerStatus {
+pub enum ServerStatus {
     Idle,
     WaitingForPlayers,
     Starting,
@@ -24,12 +22,12 @@ enum ServerStatus {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ConnectedServer {
-    id: u32,
-    ip: String,
-    port: String,
-    status: ServerStatus,
+    pub id: u32,
+    pub ip: String,
+    pub port: String,
+    pub status: ServerStatus,
     #[serde(skip, default = "default_conn")]
-    conn: mpsc::UnboundedSender<Result<Message, salvo::Error>>,
+    pub conn: mpsc::UnboundedSender<Result<Message, salvo::Error>>,
 }
 
 #[derive(Deserialize)]

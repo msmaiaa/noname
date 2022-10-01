@@ -61,7 +61,6 @@ async fn main() {
         .push(
             Router::with_path("/api/servers")
                 .hoop(with_admin)
-                .get(routes::server::get_servers)
                 .post(routes::server::create_server),
         )
         .push(Router::with_path("/ws/server").handle(on_ws_connection))

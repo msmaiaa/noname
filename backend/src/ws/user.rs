@@ -1,7 +1,9 @@
+use anyhow::anyhow;
 use futures_util::{FutureExt, StreamExt};
 
+use crate::error::AppError;
 use crate::model::user;
-use crate::service::auth::extract_data_from_depot;
+use crate::service::auth::token_data_from_depot;
 use salvo::extra::ws::{Message, WebSocket};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -32,7 +34,7 @@ pub async fn authorize_user_connection(
     depot: &mut Depot,
     _: &mut Response,
 ) -> Result<user::User, StatusError> {
-    let token_data = extract_data_from_depot(depot).ok_or(StatusError::unauthorized())?;
+    let token_data = token_data_from_depot(depot).ok_or(StatusError::unauthorized())?;
     let found_user = user::select_by_steamid(&mut crate::global::RB.clone(), token_data.steamid64)
         .await
         .map_err(|e| StatusError::internal_server_error())?
@@ -59,7 +61,11 @@ pub async fn handle_user_connection(ws: WebSocket, connected_server: &user::User
             conn: tx,
         });
 
+        let mut close_stream = false;
         while let Some(result) = user_ws_rx.next().await {
+            if close_stream {
+                break;
+            }
             let msg = match result {
                 Ok(msg) => msg,
                 Err(_) => {
@@ -69,6 +75,7 @@ pub async fn handle_user_connection(ws: WebSocket, connected_server: &user::User
             on_user_message(&_connected_user, msg)
                 .await
                 .map_err(|e| {
+                    close_stream = true;
                     tracing::error!(error = ?e, "Error while handling server message");
                 })
                 .ok();
@@ -79,26 +86,78 @@ pub async fn handle_user_connection(ws: WebSocket, connected_server: &user::User
     tokio::task::spawn(fut);
 }
 
-#[derive(Deserialize)]
-enum UserAction {}
-
-#[derive(Deserialize)]
-struct UserMessageData {}
-
-#[derive(Deserialize)]
-struct UserMessage {
-    action: UserAction,
-    data: UserMessageData,
-}
-
 async fn on_user_message(user_data: &user::User, msg: Message) -> anyhow::Result<()> {
     if !msg.is_text() {
         return Ok(());
     }
     let msg = msg.to_str()?;
-    let parsed_msg: UserMessage = serde_json::from_str(msg)?;
+    if msg.starts_with("user") {
+        handle_user_message(user_data, msg)
+            .await
+            .map_err(|_| anyhow!("Invalid user message"))?
+    } else if msg.starts_with("admin") {
+        handle_admin_message(user_data, msg)
+            .await
+            .map_err(|_| anyhow!("Invalid admin message"))?
+    } else {
+        tracing::warn!("Unknown message {} from user {}", msg, user_data.steamid64);
+    }
 
     Ok(())
+}
+
+async fn handle_user_message(user_data: &user::User, msg: &str) -> Result<(), AppError> {
+    match msg {
+        "user_ping" => send_message_to_user(&user_data.steamid64, "pong".to_string()).await,
+        _ => {
+            tracing::warn!("Unknown message from user {}", user_data.steamid64);
+        }
+    }
+    Ok(())
+}
+
+async fn handle_admin_message(user_data: &user::User, msg: &str) -> Result<(), AppError> {
+    match user_data.is_admin {
+        true => {}
+        false => {
+            tracing::warn!(
+                "Unauthorized user {} is trying to send privileged messages",
+                user_data.steamid64
+            );
+            ONLINE_USERS
+                .write()
+                .await
+                .retain(|u| u.steamid64 != user_data.steamid64);
+            return Err(AppError::Unauthorized);
+        }
+    }
+
+    match msg {
+        "admin_get_servers" => {
+            let servers = crate::service::server::get_servers().await?;
+            let servers =
+                serde_json::to_string(&servers).map_err(|e| AppError::JsonParseError(e))?;
+            send_message_to_user(&user_data.steamid64, servers).await;
+        }
+        _ => {
+            tracing::warn!("Unknown message {} from user {}", msg, user_data.steamid64);
+        }
+    }
+
+    Ok(())
+}
+
+async fn send_message_to_user(steamid64: &String, message: String) {
+    let online_users = ONLINE_USERS.read().await;
+    let user = online_users
+        .iter()
+        .find(|user| user.steamid64 == *steamid64);
+    if let Some(user) = user {
+        user.conn
+            .send(Ok(Message::text(message)))
+            .map_err(|e| tracing::error!(error = ?e, "Error while sending message to user"))
+            .ok();
+    }
 }
 
 async fn on_user_disconnected(user_data: &user::User) {

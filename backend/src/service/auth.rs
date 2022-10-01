@@ -46,12 +46,13 @@ struct SteamGetPlayerSummaryResponse {
     response: SteamResponsePlayers,
 }
 
-pub fn extract_data_from_depot(depot: &mut Depot) -> Option<TokenData> {
+pub fn token_data_from_depot(depot: &mut Depot) -> Option<TokenData> {
     depot
         .get::<TokenData>("token_data")
         .map(|data| data.clone())
 }
 
+///	/login -> redirect to steam -> /steam_callback -> verify stuff -> create token -> send token and some data to client
 pub fn generate_steam_redirector() -> Result<steam_auth::Redirector, AppError> {
     steam_auth::Redirector::new(global::API_URL.to_string(), "/api/auth/steam_callback").map_err(
         |e| {

@@ -2,9 +2,8 @@ use salvo::Depot;
 use salvo::{handler, prelude::StatusError, writer::Json, Request, Response};
 use serde::Deserialize;
 
-use crate::service::auth::extract_data_from_depot;
+use crate::service::auth::token_data_from_depot;
 use crate::service::server;
-use crate::ws::server::get_online_servers;
 use salvo::http::StatusCode;
 #[derive(Deserialize)]
 pub struct CreateServerPayload {
@@ -13,17 +12,12 @@ pub struct CreateServerPayload {
 }
 
 #[handler]
-pub async fn get_servers(req: &mut Request, res: &mut Response) {
-    res.render(Json(get_online_servers().await))
-}
-
-#[handler]
 pub async fn create_server(
     req: &mut Request,
     depot: &mut Depot,
     res: &mut Response,
 ) -> Result<(), StatusError> {
-    let data = extract_data_from_depot(depot).unwrap();
+    let data = token_data_from_depot(depot).unwrap();
     tracing::info!("Creating server for user {}", data.steamid64);
     let payload = req.parse_body::<CreateServerPayload>().await.map_err(|e| {
         res.render(e.to_string());
