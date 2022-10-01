@@ -61,19 +61,32 @@ async fn with_admin(
     depot: &mut Depot,
     _: &mut Response,
 ) -> Result<(), StatusError> {
-    depot
+    let token_data = depot
         .jwt_auth_data::<service::auth::TokenData>()
-        .ok_or(StatusError::unauthorized())
-        .map(|data| match data.claims.is_admin {
-            true => Ok(()),
-            false => Err(StatusError::unauthorized()),
-        })?
+        .ok_or(StatusError::unauthorized())?;
+    let user = model::user::select_by_steamid(
+        &mut global::RB.clone(),
+        token_data.claims.steamid64.clone(),
+    )
+    .await
+    .map_err(|_| StatusError::unauthorized())?;
+    match user {
+        Some(user) => {
+            if user.is_admin {
+                Ok(())
+            } else {
+                Err(StatusError::unauthorized())
+            }
+        }
+        None => Err(StatusError::unauthorized()),
+    }
 }
 
 #[tokio::main]
 async fn main() {
     dotenv().ok();
     tracing_subscriber::fmt::init();
+
     global::RB
         .init(rbdc_pg::driver::PgDriver {}, global::DATABASE_URL.as_str())
         .expect("Failed to initialize database connection");

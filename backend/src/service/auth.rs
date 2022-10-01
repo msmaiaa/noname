@@ -13,7 +13,6 @@ use crate::model::user::User;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TokenData {
     pub steamid64: String,
-    pub is_admin: bool,
     pub iat: i64,
     pub exp: i64,
 }
@@ -63,7 +62,7 @@ pub fn generate_steam_redirector() -> Result<steam_auth::Redirector, AppError> {
     )
 }
 
-pub fn create_access_token(steamid64: String, is_admin: bool) -> Result<String, AppError> {
+pub fn create_access_token(steamid64: String) -> Result<String, AppError> {
     let iat = Utc::now();
     let exp = iat + Duration::seconds(3600);
     let iat = iat.timestamp_millis();
@@ -72,7 +71,6 @@ pub fn create_access_token(steamid64: String, is_admin: bool) -> Result<String, 
     let key = EncodingKey::from_secret(crate::global::JWT_KEY.as_bytes());
     let claims = TokenData {
         steamid64,
-        is_admin,
         iat,
         exp,
     };
@@ -94,7 +92,7 @@ pub async fn on_steam_callback(qs: &str) -> Result<(String, SteamUser), AppError
             AppError::DatabaseError(e)
         })? {
         Some(user) => {
-            _token = create_access_token(user.steamid64, user.is_admin)?;
+            _token = create_access_token(user.steamid64)?;
         }
         None => {
             let new_user = User::from_steamid64(steamid64);
@@ -104,7 +102,7 @@ pub async fn on_steam_callback(qs: &str) -> Result<(String, SteamUser), AppError
                     tracing::error!("Failed to insert user: {}", e);
                     AppError::DatabaseError(e)
                 })?;
-            _token = create_access_token(new_user.steamid64, new_user.is_admin)?;
+            _token = create_access_token(new_user.steamid64)?;
         }
     }
     let steam_user = query_steam_user(steamid64).await?;
