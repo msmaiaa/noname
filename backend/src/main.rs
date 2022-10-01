@@ -1,12 +1,7 @@
 use dotenv::dotenv;
-use salvo::{
-    extra::{
-        jwt_auth::{JwtAuth, JwtAuthDepotExt, JwtTokenExtractor},
-        ws::WebSocketUpgrade,
-    },
-    prelude::*,
-};
-use service::auth::extract_data_from_depot;
+use salvo::{extra::ws::WebSocketUpgrade, prelude::*};
+
+use crate::middleware::{with_admin, with_jwt};
 
 pub mod driver;
 pub mod error;
@@ -48,47 +43,6 @@ async fn on_ws_connection(
     Ok(())
 }
 
-#[handler]
-async fn with_admin(
-    _: &mut Request,
-    depot: &mut Depot,
-    _: &mut Response,
-) -> Result<(), StatusError> {
-    let token_data = extract_data_from_depot(depot).ok_or(StatusError::unauthorized())?;
-    let user =
-        model::user::select_by_steamid(&mut global::RB.clone(), token_data.steamid64.clone())
-            .await
-            .map_err(|_| StatusError::unauthorized())?;
-    match user {
-        Some(user) => {
-            if user.is_admin {
-                Ok(())
-            } else {
-                Err(StatusError::unauthorized())
-            }
-        }
-        None => Err(StatusError::unauthorized()),
-    }
-}
-
-#[handler]
-fn with_jwt(req: &mut Request, depot: &mut Depot, res: &mut Response) -> Result<(), StatusError> {
-    let jwt_token = req
-        .headers()
-        .get("Authorization")
-        .map(|v| v.to_str().unwrap().replace("Bearer ", ""))
-        .ok_or(StatusError::unauthorized())?;
-    service::auth::decode_token(&jwt_token)
-        .map(|token_data| {
-            depot.insert("token_data", token_data);
-        })
-        .map_err(|e| {
-            res.render(e.to_string());
-            StatusError::unauthorized()
-        })?;
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() {
     dotenv().ok();
@@ -106,7 +60,6 @@ async fn main() {
         .push(Router::with_path("/api/auth/steam_callback").get(routes::auth::steam_callback))
         .push(
             Router::with_path("/api/servers")
-                .hoop(with_jwt)
                 .hoop(with_admin)
                 .get(routes::server::get_servers)
                 .post(routes::server::create_server),
