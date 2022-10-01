@@ -3,7 +3,6 @@ use rbatis::rbdc::db::ExecResult;
 
 use crate::global;
 use crate::model;
-use crate::model::server::Server;
 use crate::{error::AppError, routes::server::CreateServerPayload};
 
 pub async fn create_server(payload: CreateServerPayload) -> Result<ExecResult, AppError> {

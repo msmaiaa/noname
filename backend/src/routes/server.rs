@@ -29,6 +29,7 @@ pub async fn create_server(
         res.render(e.to_string());
         StatusError::bad_request()
     })?;
+    //TODO: better error handling
     let created_server = server::create_server(payload).await?;
     res.set_status_code(StatusCode::CREATED);
     res.render(Json(created_server));
