@@ -2,9 +2,11 @@ use lazy_static::lazy_static;
 use rbatis::Rbatis;
 
 use crate::ws::server::ServerList;
+use crate::ws::user::UserList;
 
 lazy_static! {
     pub static ref ONLINE_SERVERS: ServerList = ServerList::default();
+    pub static ref ONLINE_USERS: UserList = UserList::default();
     pub static ref DATABASE_URL: String = std::env::var("DATABASE_URL")
         .expect("DATABASE_URL is not set in the environment variables");
     pub static ref STEAM_KEY: String =
