@@ -1,11 +1,14 @@
 use anyhow::anyhow;
+use axum::{
+    body::Body,
+    extract::ws::{Message, WebSocket},
+    http::Request,
+};
 use futures_util::{FutureExt, StreamExt};
 
-use crate::error::AppError;
 use crate::model::user;
-use crate::service::auth::token_data_from_depot;
-use salvo::extra::ws::{Message, WebSocket};
-use salvo::prelude::*;
+use crate::{error::AppError, service::auth::TokenData};
+
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -17,10 +20,10 @@ pub type UserList = RwLock<Vec<ConnectedUser>>;
 pub struct ConnectedUser {
     pub steamid64: String,
     #[serde(skip, default = "default_conn")]
-    pub conn: mpsc::UnboundedSender<Result<Message, salvo::Error>>,
+    pub conn: mpsc::UnboundedSender<Result<Message, axum::Error>>,
 }
 
-fn default_conn() -> mpsc::UnboundedSender<Result<Message, salvo::Error>> {
+fn default_conn() -> mpsc::UnboundedSender<Result<Message, axum::Error>> {
     let (tx, _) = mpsc::unbounded_channel();
     tx
 }
@@ -30,19 +33,17 @@ pub async fn get_online_users() -> Vec<ConnectedUser> {
 }
 
 pub async fn authorize_user_connection(
-    _: &mut Request,
-    depot: &mut Depot,
-    _: &mut Response,
-) -> Result<user::User, StatusError> {
-    let token_data = token_data_from_depot(depot).ok_or(StatusError::unauthorized())?;
+    _: Request<Body>,
+    token_data: TokenData,
+) -> Result<user::User, AppError> {
     let found_user = user::select_by_steamid(&mut crate::global::RB.clone(), token_data.steamid64)
         .await
-        .map_err(|e| StatusError::internal_server_error())?
-        .ok_or(StatusError::unauthorized())?;
+        .map_err(|e| AppError::DatabaseError(e))?
+        .ok_or(AppError::Unauthorized)?;
     Ok(found_user)
 }
 
-pub async fn handle_user_connection(ws: WebSocket, connected_server: &user::User) {
+pub async fn handle_user_connection(ws: WebSocket, connected_user: user::User) {
     //adds the server to the list
     let (user_ws_tx, mut user_ws_rx) = ws.split();
 
@@ -54,7 +55,7 @@ pub async fn handle_user_connection(ws: WebSocket, connected_server: &user::User
         }
     });
     tokio::task::spawn(fut);
-    let _connected_user = connected_server.clone();
+    let _connected_user = connected_user.clone();
     let fut = async move {
         ONLINE_USERS.write().await.push(ConnectedUser {
             steamid64: _connected_user.steamid64.clone(),
@@ -87,10 +88,7 @@ pub async fn handle_user_connection(ws: WebSocket, connected_server: &user::User
 }
 
 async fn on_user_message(user_data: &user::User, msg: Message) -> anyhow::Result<()> {
-    if !msg.is_text() {
-        return Ok(());
-    }
-    let msg = msg.to_str()?;
+    let msg = msg.to_text()?;
     if msg.starts_with("user") {
         handle_user_message(user_data, msg)
             .await
@@ -154,7 +152,7 @@ async fn send_message_to_user(steamid64: &String, message: String) {
         .find(|user| user.steamid64 == *steamid64);
     if let Some(user) = user {
         user.conn
-            .send(Ok(Message::text(message)))
+            .send(Ok(Message::Text(message)))
             .map_err(|e| tracing::error!(error = ?e, "Error while sending message to user"))
             .ok();
     }

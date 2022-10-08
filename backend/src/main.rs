@@ -1,46 +1,51 @@
-use dotenv::dotenv;
-use salvo::{extra::ws::WebSocketUpgrade, prelude::*};
+use std::net::SocketAddr;
 
-use crate::middleware::{with_admin, with_jwt};
+use crate::middleware::with_admin;
+use axum::{
+    body::{self, Body},
+    extract::{ws::WebSocketUpgrade, ConnectInfo},
+    http::{header, Request},
+    response::IntoResponse,
+    routing::{get, post},
+    Router,
+};
+use dotenv::dotenv;
+use error::AppError;
+use service::auth::TokenData;
+use tower::ServiceBuilder;
+use tower_http::{
+    cors::{Any, CorsLayer},
+    ServiceBuilderExt,
+};
+
+//use crate::middleware::{with_admin, with_jwt};
 
 pub mod driver;
 pub mod error;
+pub mod extractor;
 pub mod global;
 pub mod middleware;
 pub mod model;
+pub mod response;
 pub mod routes;
 pub mod service;
 pub mod ws;
 
-#[handler]
-async fn on_ws_connection(
-    req: &mut Request,
-    depot: &mut Depot,
-    res: &mut Response,
-) -> Result<(), StatusError> {
-    match req.uri().to_string().as_str() {
-        "/ws/server" => {
-            let data = ws::server::authorize_server_connection(req, res).await?;
-            WebSocketUpgrade::new()
-                .upgrade(req, res, move |ws| async move {
-                    ws::server::handle_server_connection(ws, &data).await
-                })
-                .await?;
-        }
-        "/ws/user" => {
-            let data = ws::user::authorize_user_connection(req, depot, res).await?;
-            WebSocketUpgrade::new()
-                .upgrade(req, res, move |ws| async move {
-                    ws::user::handle_user_connection(ws, &data).await
-                })
-                .await?;
-        }
-        _ => {
-            return Err(StatusError::forbidden());
-        }
-    };
-
-    Ok(())
+async fn on_server_connection(
+    ws: WebSocketUpgrade,
+    req: Request<Body>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> Result<impl IntoResponse, AppError> {
+    let data = ws::server::authorize_server_connection(req, addr).await?;
+    Ok(ws.on_upgrade(move |ws| ws::server::handle_server_connection(ws, data)))
+}
+async fn on_user_connection(
+    token_data: TokenData,
+    ws: WebSocketUpgrade,
+    req: Request<Body>,
+) -> Result<impl IntoResponse, AppError> {
+    let data = ws::user::authorize_user_connection(req, token_data).await?;
+    Ok(ws.on_upgrade(move |ws| ws::user::handle_user_connection(ws, data)))
 }
 
 #[tokio::main]
@@ -55,24 +60,32 @@ async fn main() {
 
     let listen_addr = format!("0.0.0.0:{}", *global::PORT);
 
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(vec![header::AUTHORIZATION, header::CONTENT_TYPE]);
+
     let router = Router::new()
-        .push(Router::with_path("/api/auth/login").get(routes::auth::login))
-        .push(Router::with_path("/api/auth/steam_callback").get(routes::auth::steam_callback))
-        .push(
-            Router::with_path("/api/servers")
-                .hoop(with_admin)
-                .post(routes::server::create_server),
+        .route("/api/auth/login", get(routes::auth::login))
+        .route(
+            "/api/auth/steam_callback",
+            get(routes::auth::steam_callback),
         )
-        .push(Router::with_path("/ws/server").handle(on_ws_connection))
-        .push(
-            Router::with_path("/ws/user")
-                .hoop(with_jwt)
-                .handle(on_ws_connection),
-        );
+        .route(
+            "/api/servers",
+            post(routes::server::create_server).route_layer(axum::middleware::from_fn(with_admin)),
+        )
+        .route("/ws/server", get(on_server_connection))
+        .route("/ws/user", get(on_user_connection))
+        .layer(cors);
 
     tracing::info!("Server started at http://{}/", listen_addr);
 
-    Server::new(TcpListener::bind(&listen_addr))
-        .serve(router)
-        .await;
+    axum::Server::bind(&SocketAddr::from((
+        [0, 0, 0, 0],
+        global::PORT.parse::<u16>().unwrap(),
+    )))
+    .serve(router.into_make_service())
+    .await
+    .unwrap();
 }

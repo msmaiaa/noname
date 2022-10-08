@@ -1,8 +1,13 @@
+use std::net::SocketAddr;
+
+use axum::{
+    body::Body,
+    extract::ws::{Message, WebSocket},
+    http::Request,
+};
 use futures_util::{FutureExt, StreamExt};
 
-use crate::model::server;
-use salvo::extra::ws::{Message, WebSocket};
-use salvo::prelude::*;
+use crate::{error::AppError, model::server};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -27,7 +32,7 @@ pub struct ConnectedServer {
     pub port: String,
     pub status: ServerStatus,
     #[serde(skip, default = "default_conn")]
-    pub conn: mpsc::UnboundedSender<Result<Message, salvo::Error>>,
+    pub conn: mpsc::UnboundedSender<Result<Message, axum::Error>>,
 }
 
 #[derive(Deserialize)]
@@ -36,7 +41,7 @@ enum ServerMessageData {
     Status(ServerStatus),
 }
 
-fn default_conn() -> mpsc::UnboundedSender<Result<Message, salvo::Error>> {
+fn default_conn() -> mpsc::UnboundedSender<Result<Message, axum::Error>> {
     let (tx, _) = mpsc::unbounded_channel();
     tx
 }
@@ -46,33 +51,27 @@ pub async fn get_online_servers() -> Vec<ConnectedServer> {
 }
 
 pub async fn authorize_server_connection(
-    req: &mut Request,
-    _: &mut Response,
-) -> Result<server::Server, StatusError> {
-    let socket_info = req
-        .remote_addr()
-        .ok_or(StatusError::unauthorized())?
-        .as_ipv4()
-        .ok_or(StatusError::unauthorized())?;
+    req: Request<Body>,
+    addr: SocketAddr,
+) -> Result<server::Server, AppError> {
     let port: String = req
-        .header::<String>("PORT")
-        .map(|p| p.to_string())
-        .ok_or(StatusError::unauthorized())?;
-    let found_server = server::select_by_full_ip(
-        &mut crate::global::RB.clone(),
-        socket_info.ip().to_string(),
-        port,
-    )
-    .await
-    .map_err(|e| StatusError::internal_server_error())?
-    .ok_or({
-        tracing::info!("Unauthorized server tried to connect: {}", socket_info.ip());
-        StatusError::unauthorized()
-    })?;
+        .headers()
+        .get("PORT")
+        .map(|p| p.to_str().unwrap().to_string())
+        .ok_or(AppError::Unauthorized)?;
+
+    let found_server =
+        server::select_by_full_ip(&mut crate::global::RB.clone(), addr.ip().to_string(), port)
+            .await
+            .map_err(|e| AppError::DatabaseError(e))?
+            .ok_or({
+                tracing::info!("Unauthorized server tried to connect: {}", addr.ip());
+                AppError::Unauthorized
+            })?;
     Ok(found_server)
 }
 
-pub async fn handle_server_connection(ws: WebSocket, connected_server: &server::Server) {
+pub async fn handle_server_connection(ws: WebSocket, connected_server: server::Server) {
     //adds the server to the list
     let (server_ws_tx, mut server_ws_rx) = ws.split();
 
@@ -130,10 +129,7 @@ struct ServerMessage {
 }
 
 async fn on_server_message(server_data: &server::Server, msg: Message) -> anyhow::Result<()> {
-    if !msg.is_text() {
-        return Ok(());
-    }
-    let msg = msg.to_str()?;
+    let msg = msg.to_text()?;
     let parsed_msg: ServerMessage = serde_json::from_str(msg)?;
 
     match parsed_msg.action {

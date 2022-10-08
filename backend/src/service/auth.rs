@@ -1,7 +1,6 @@
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header};
 
-use salvo::Depot;
 use serde::{Deserialize, Serialize};
 use steam_auth;
 
@@ -44,12 +43,6 @@ struct SteamResponsePlayers {
 #[derive(Deserialize)]
 struct SteamGetPlayerSummaryResponse {
     response: SteamResponsePlayers,
-}
-
-pub fn token_data_from_depot(depot: &mut Depot) -> Option<TokenData> {
-    depot
-        .get::<TokenData>("token_data")
-        .map(|data| data.clone())
 }
 
 ///	/login -> redirect to steam -> /steam_callback -> verify stuff -> create token -> send token and some data to client
