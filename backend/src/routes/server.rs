@@ -1,4 +1,4 @@
-use axum::Json;
+use axum::{Extension, Json};
 use rbatis::rbdc::db::ExecResult;
 use serde::Deserialize;
 
@@ -14,7 +14,7 @@ pub struct CreateServerPayload {
 
 pub async fn create_server(
     Json(body): Json<CreateServerPayload>,
-    token_data: TokenData,
+    Extension(token_data): Extension<TokenData>,
 ) -> Result<AppResponse<ExecResult>, AppError> {
     tracing::info!("Creating server for user {}", token_data.steamid64);
     let created_server = server::create_server(body).await?;

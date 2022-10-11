@@ -2,8 +2,12 @@ use std::net::SocketAddr;
 
 use axum::{
     body::Body,
-    extract::ws::{Message, WebSocket},
+    extract::{
+        ws::{Message, WebSocket},
+        ConnectInfo, WebSocketUpgrade,
+    },
     http::Request,
+    response::IntoResponse,
 };
 use futures_util::{FutureExt, StreamExt};
 
@@ -50,6 +54,15 @@ pub async fn get_online_servers() -> Vec<ConnectedServer> {
     ONLINE_SERVERS.read().await.to_vec()
 }
 
+pub async fn on_server_connection(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ws: WebSocketUpgrade,
+    req: Request<Body>,
+) -> Result<impl IntoResponse, AppError> {
+    let data = authorize_server_connection(req, addr).await?;
+    Ok(ws.on_upgrade(move |ws| handle_server_connection(ws, data)))
+}
+
 pub async fn authorize_server_connection(
     req: Request<Body>,
     addr: SocketAddr,
@@ -59,7 +72,6 @@ pub async fn authorize_server_connection(
         .get("PORT")
         .map(|p| p.to_str().unwrap().to_string())
         .ok_or(AppError::Unauthorized)?;
-
     let found_server =
         server::select_by_full_ip(&mut crate::global::RB.clone(), addr.ip().to_string(), port)
             .await
@@ -97,9 +109,10 @@ pub async fn handle_server_connection(ws: WebSocket, connected_server: server::S
             let msg = match result {
                 Ok(msg) => msg,
                 Err(e) => {
-                    eprintln!(
+                    tracing::error!(
                         "websocket server error(uid={}): {}",
-                        _connected_server.ip, e
+                        _connected_server.ip,
+                        e
                     );
                     break;
                 }

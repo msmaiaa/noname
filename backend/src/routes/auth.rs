@@ -9,7 +9,7 @@ use axum::{
 use reqwest::StatusCode;
 use serde::Serialize;
 
-use crate::{error::AppError, response::AppResponse, service::auth::*};
+use crate::{error::AppError, service::auth::*};
 #[derive(Serialize)]
 pub struct LoginResponse {
     token: String,

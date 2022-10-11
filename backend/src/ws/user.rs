@@ -1,8 +1,13 @@
 use anyhow::anyhow;
 use axum::{
     body::Body,
-    extract::ws::{Message, WebSocket},
+    extract::{
+        ws::{Message, WebSocket},
+        WebSocketUpgrade,
+    },
     http::Request,
+    response::IntoResponse,
+    Extension,
 };
 use futures_util::{FutureExt, StreamExt};
 
@@ -32,6 +37,17 @@ pub async fn get_online_users() -> Vec<ConnectedUser> {
     ONLINE_USERS.read().await.to_vec()
 }
 
+pub async fn on_user_connection(
+    ws: WebSocketUpgrade,
+    Extension(token_data): Extension<TokenData>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = user::select_by_steamid(&mut crate::global::RB.clone(), token_data.steamid64)
+        .await
+        .map_err(|e| AppError::DatabaseError(e))?
+        .ok_or(AppError::Unauthorized)?;
+    Ok(ws.on_upgrade(move |ws| handle_user_connection(ws, user)))
+}
+
 pub async fn authorize_user_connection(
     _: Request<Body>,
     token_data: TokenData,
@@ -44,7 +60,6 @@ pub async fn authorize_user_connection(
 }
 
 pub async fn handle_user_connection(ws: WebSocket, connected_user: user::User) {
-    //adds the server to the list
     let (user_ws_tx, mut user_ws_rx) = ws.split();
 
     let (tx, rx) = mpsc::unbounded_channel();
@@ -93,7 +108,19 @@ async fn on_user_message(user_data: &user::User, msg: Message) -> anyhow::Result
         handle_user_message(user_data, msg)
             .await
             .map_err(|_| anyhow!("Invalid user message"))?
-    } else if msg.starts_with("admin") {
+    }
+    if msg.starts_with("admin") {
+        if !user_data.is_admin {
+            tracing::warn!(
+                "Unauthorized user {} is trying to send privileged messages",
+                user_data.steamid64
+            );
+            ONLINE_USERS
+                .write()
+                .await
+                .retain(|u| u.steamid64 != user_data.steamid64);
+            return Ok(());
+        }
         handle_admin_message(user_data, msg)
             .await
             .map_err(|_| anyhow!("Invalid admin message"))?
@@ -115,21 +142,6 @@ async fn handle_user_message(user_data: &user::User, msg: &str) -> Result<(), Ap
 }
 
 async fn handle_admin_message(user_data: &user::User, msg: &str) -> Result<(), AppError> {
-    match user_data.is_admin {
-        true => {}
-        false => {
-            tracing::warn!(
-                "Unauthorized user {} is trying to send privileged messages",
-                user_data.steamid64
-            );
-            ONLINE_USERS
-                .write()
-                .await
-                .retain(|u| u.steamid64 != user_data.steamid64);
-            return Err(AppError::Unauthorized);
-        }
-    }
-
     match msg {
         "admin_get_servers" => {
             let servers = crate::service::server::get_servers().await?;
@@ -159,7 +171,7 @@ async fn send_message_to_user(steamid64: &String, message: String) {
 }
 
 async fn on_user_disconnected(user_data: &user::User) {
-    tracing::info!("Server {} disconnected", user_data.steamid64);
+    tracing::info!("User {} disconnected", user_data.steamid64);
     ONLINE_USERS.write().await.retain(|user| {
         if user.steamid64 == user_data.steamid64 {
             return false;

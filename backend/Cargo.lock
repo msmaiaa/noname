@@ -160,35 +160,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "backend"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "chrono",
- "dotenv",
- "futures-util",
- "jsonwebtoken",
- "lazy_static",
- "rbatis",
- "rbdc-pg",
- "rbs",
- "refinery",
- "reqwest 0.11.12",
- "rust-argon2",
- "serde",
- "serde_json",
- "steam-auth",
- "tokio 1.21.1",
- "tokio-postgres",
- "tokio-stream",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "backtrace"
 version = "0.3.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1437,6 +1408,35 @@ dependencies = [
  "cfg-if 0.1.10",
  "libc",
  "winapi 0.3.9",
+]
+
+[[package]]
+name = "noname"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "dotenv",
+ "futures-util",
+ "jsonwebtoken",
+ "lazy_static",
+ "rbatis",
+ "rbdc-pg",
+ "rbs",
+ "refinery",
+ "reqwest 0.11.12",
+ "rust-argon2",
+ "serde",
+ "serde_json",
+ "steam-auth",
+ "tokio 1.21.1",
+ "tokio-postgres",
+ "tokio-stream",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -39,3 +39,13 @@ pub async fn migrate(db_kind: DbKind) {
         }
     }
 }
+
+pub async fn init_and_migrate() {
+    crate::global::RB
+        .init(
+            rbdc_pg::driver::PgDriver {},
+            crate::global::DATABASE_URL.as_str(),
+        )
+        .expect("Failed to initialize database connection");
+    migrate(DbKind::Postgres).await;
+}
