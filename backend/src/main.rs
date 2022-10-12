@@ -6,7 +6,7 @@ use axum::{
     Router,
 };
 use dotenv::dotenv;
-use noname::{global, middleware::with_admin, routes, ws};
+use noname::{global, middleware::{with_admin, with_admin_qs} , routes, ws};
 use tower_http::cors::{Any, CorsLayer};
 
 #[tokio::main]
@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     let ws_router = Router::new()
         .route(
             "/user",
-            get(ws::user::on_user_connection).route_layer(axum::middleware::from_fn(with_admin)),
+        get(ws::user::on_user_connection).route_layer(axum::middleware::from_fn(with_admin_qs)),
         )
         .route("/server", get(ws::server::on_server_connection));
 
