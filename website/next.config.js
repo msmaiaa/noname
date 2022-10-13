@@ -4,7 +4,7 @@ const nextConfig = {
   swcMinify: true,
 	env: {
 		API_URL: "http://localhost:1337/api",
-		WS_URL: "http://localhost:1337/ws",
+		WS_URL: "ws://localhost:1337/ws",
 	}
 }
 

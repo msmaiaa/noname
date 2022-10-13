@@ -16,6 +16,7 @@
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "react-redux": "^8.0.4",
+    "react-use-websocket": "3.0.0",
     "styled-components": "^5.3.6",
     "zustand": "^4.1.1"
   },

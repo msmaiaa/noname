@@ -22,7 +22,6 @@ type CustomPageProps = {
 
 function MyApp({ Component, pageProps }: AppProps<CustomPageProps>) {
   const { loggedIn, setLoggedIn, setUser, setLoading, isLoading } = userStore();
-
   useEffect(() => {
     const localUser = localStorage.getItem("user_data");
     if (localUser && !loggedIn) {

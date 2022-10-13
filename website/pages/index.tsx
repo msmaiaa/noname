@@ -5,7 +5,7 @@ const Home: NextPage = () => {
   return (
     <div>
       <p>This is the home page</p>
-      <Link href="/dashboard">admin panel</Link>
+      <Link href="/admin/dashboard">admin panel</Link>
     </div>
   );
 };
