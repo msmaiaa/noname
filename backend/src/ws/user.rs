@@ -131,9 +131,24 @@ async fn on_user_message(user_data: &user::User, msg: Message) -> anyhow::Result
     Ok(())
 }
 
+#[derive(Deserialize, Serialize)]
+struct UserResponse<T: Serialize> {
+    action: String,
+    data: T
+}
+
+impl<T: Serialize> UserResponse<T> {
+    pub fn new(action: String, data: T) -> Self {
+        Self {
+            action,
+            data
+        }
+    }
+}
+
 async fn handle_user_message(user_data: &user::User, msg: &str) -> Result<(), AppError> {
     match msg {
-        "user_ping" => send_message_to_user(&user_data.steamid64, "pong".to_string()).await,
+        "user_ping" => send_message_to_user(&user_data.steamid64, "pong".to_string(), "ping").await,
         _ => {
             tracing::warn!("Unknown message from user {}", user_data.steamid64);
         }
@@ -147,7 +162,7 @@ async fn handle_admin_message(user_data: &user::User, msg: &str) -> Result<(), A
             let servers = crate::service::server::get_servers().await?;
             let servers =
                 serde_json::to_string(&servers).map_err(|e| AppError::JsonParseError(e))?;
-            send_message_to_user(&user_data.steamid64, servers).await;
+            send_message_to_user(&user_data.steamid64, servers, "response_get_servers").await;
         }
         _ => {
             tracing::warn!("Unknown message {} from user {}", msg, user_data.steamid64);
@@ -157,14 +172,23 @@ async fn handle_admin_message(user_data: &user::User, msg: &str) -> Result<(), A
     Ok(())
 }
 
-async fn send_message_to_user(steamid64: &String, message: String) {
+async fn send_message_to_user(steamid64: &String, message: String, action: &str) {
     let online_users = ONLINE_USERS.read().await;
     let user = online_users
         .iter()
         .find(|user| user.steamid64 == *steamid64);
+
     if let Some(user) = user {
+        let response_string = match serde_json::to_string(&UserResponse::new(action.to_string(), message)) {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::error!("Couldn't serialize UserResponse json {}", e.to_string());
+                return;
+            }
+        };
+
         user.conn
-            .send(Ok(Message::Text(message)))
+        .send(Ok(Message::Text(response_string)))
             .map_err(|e| tracing::error!(error = ?e, "Error while sending message to user"))
             .ok();
     }
